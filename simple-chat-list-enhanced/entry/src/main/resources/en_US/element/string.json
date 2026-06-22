@@ -71,6 +71,10 @@
     {
       "name": "Completed",
       "value": "Completed."
+    },
+    {
+      "name": "permission_distributed_datasync_reason",
+      "value": "Sync chat messages across your devices."
     }
   ]
 }

@@ -19,6 +19,7 @@ export enum MessageType {
   EMOJI = 'emoji',     // 表情消息
   IMAGE = 'image',     // 图片消息
   VOICE = 'voice',     // 语音消息
+  FILE = 'file',       // 文件消息
   SYSTEM = 'system'    // 系统消息
 }
 

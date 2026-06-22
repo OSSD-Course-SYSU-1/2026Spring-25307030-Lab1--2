@@ -15,12 +15,23 @@
 
 import { ChatPage } from './ChatPage';
 import { Item, CommonConstants } from '../common/CommonConstants';
+import { ChatStorage, contactToSerializable, serializableToContact, SerializableContact } from '../common/ChatStorage';
+import {
+  APP_CONTINUATION_CONTACT_ID,
+  APP_CONTINUATION_CONTACTS_JSON,
+  APP_CONTINUATION_ROUTE,
+  APP_CONTINUATION_TOKEN,
+  APP_CURRENT_CONTACT_ID,
+  APP_CURRENT_ROUTE,
+  ROUTE_CHAT,
+  ROUTE_INDEX
+} from '../common/ContinuationState';
 
 @Entry
 @Component
 struct Index {
   @State isFlag: boolean = false;
-  @Provide('NavPathStack') pageStack: NavPathStack = new NavPathStack();
+  private pageStack: NavPathStack = new NavPathStack();
   @State sortedList: Item[] = [];
   @State dragItem: Item = {
     id: -1,
@@ -38,7 +49,11 @@ struct Index {
     members: []
   };
   private scroller: Scroller = new Scroller();
+  private chatStorage: ChatStorage = ChatStorage.getInstance();
+  private isStorageReady: boolean = false;
+  private isSyncListenerReady: boolean = false;
   @StorageProp('topRectHeight') topRectHeight: number = 0;
+  @StorageLink('chat_continuation_token') continuationToken: number = 0;
 
   @Builder
   PagesMap(name: string, param: string) {
@@ -47,8 +62,8 @@ struct Index {
     }
   }
 
-  sortList() {
-    this.sortedList = CommonConstants.MESSAGE_LIST.sort((a, b) => {
+  sortList(shouldSave: boolean = false) {
+    this.sortedList = this.sortedList.sort((a, b) => {
       if (a.isTop && !b.isTop) {
         return -1;
       } else if (!a.isTop && b.isTop) {
@@ -56,17 +71,110 @@ struct Index {
       }
       return a.id - b.id;
     })
+    if (shouldSave) {
+      this.saveContacts();
+    }
+  }
+
+  async loadContacts() {
+    await this.chatStorage.init(getContext(this));
+    this.isStorageReady = true;
+    this.bindSyncListener();
+    let storedContacts = await this.chatStorage.loadContacts();
+    if (storedContacts.length > 0) {
+      this.sortedList = storedContacts.map((item) => serializableToContact(item));
+    } else {
+      this.sortedList = CommonConstants.MESSAGE_LIST;
+    }
+    this.sortList();
+    setTimeout(() => {
+      this.consumeContinuationState();
+    }, 100);
+  }
+
+  async saveContacts() {
+    if (!this.isStorageReady) {
+      return;
+    }
+    await this.chatStorage.saveContacts(this.sortedList.map((item: Item) => contactToSerializable(item)));
+  }
+
+  bindSyncListener() {
+    if (this.isSyncListenerReady) {
+      return;
+    }
+    this.isSyncListenerReady = true;
+    this.chatStorage.onContactsChanged((contacts: SerializableContact[]) => {
+      this.sortedList = contacts.map((item: SerializableContact) => serializableToContact(item));
+      this.sortList();
+    });
+  }
+
+  rememberIndexContinuationState() {
+    AppStorage.setOrCreate(APP_CURRENT_ROUTE, ROUTE_INDEX);
+    AppStorage.setOrCreate(APP_CURRENT_CONTACT_ID, -1);
+  }
+
+  rememberChatContinuationState(contactId: number) {
+    AppStorage.setOrCreate(APP_CURRENT_ROUTE, ROUTE_CHAT);
+    AppStorage.setOrCreate(APP_CURRENT_CONTACT_ID, contactId);
+  }
+
+  consumeContinuationState() {
+    let token = AppStorage.get<number>(APP_CONTINUATION_TOKEN) || 0;
+    if (token === 0) {
+      return;
+    }
+
+    let contactsJson = AppStorage.get<string>(APP_CONTINUATION_CONTACTS_JSON) || '';
+    if (contactsJson) {
+      try {
+        let contacts = JSON.parse(contactsJson) as SerializableContact[];
+        if (contacts.length > 0) {
+          this.sortedList = contacts.map((item: SerializableContact) => serializableToContact(item));
+          this.sortList();
+        }
+      } catch (err) {
+        console.warn('[Index] Failed to parse continuation contacts: ' + JSON.stringify(err));
+      }
+    }
+
+    let route = AppStorage.get<string>(APP_CONTINUATION_ROUTE) || ROUTE_INDEX;
+    let contactId = AppStorage.get<number>(APP_CONTINUATION_CONTACT_ID) || -1;
+    if (route === ROUTE_CHAT && contactId >= 0) {
+      let target = this.sortedList.find((item: Item) => item.id === contactId);
+      if (target) {
+        this.rememberChatContinuationState(target.id);
+        this.pageStack.pushPathByName('ChatPage', target);
+      } else if (this.sortedList.length === 0) {
+        return;
+      }
+    }
+
+    AppStorage.setOrCreate(APP_CONTINUATION_TOKEN, 0);
+    AppStorage.setOrCreate(APP_CONTINUATION_CONTACTS_JSON, '');
+  }
+
+  getLastMessageText(item: Item): ResourceStr {
+    if (item.message.length === 0) {
+      return '';
+    }
+    return item.message[item.message.length - 1].msg;
   }
 
   // Switch top status.
   toggleTop(item: Item) {
     item.isTop = !item.isTop;
-    this.sortList();
+    this.sortList(true);
   }
 
   aboutToAppear() {
-    this.sortList();
-    this.pageStack.disableAnimation(true);
+    this.rememberIndexContinuationState();
+    this.loadContacts();
+  }
+
+  onPageShow() {
+    this.consumeContinuationState();
   }
 
   // [Start dragFloatView]
@@ -96,7 +204,7 @@ struct Index {
             .fontWeight(FontWeight.Bold)
             .margin({ bottom: 8 })
             .textAlign(TextAlign.Start)
-          Text(item.message[item.message.length - 1].msg)
+          Text(this.getLastMessageText(item))
             .fontSize(16)
             .maxLines(1)
             .constraintSize({ maxWidth: '70%' })
@@ -138,6 +246,7 @@ struct Index {
         .height(24)
         .onClick(() => {
           this.sortedList.splice(index, 1);
+          this.saveContacts();
         })
     }
     .padding(4)
@@ -151,6 +260,15 @@ struct Index {
   build() {
     Navigation(this.pageStack) {
       Stack({ alignContent: Alignment.BottomEnd }) {
+        if (this.continuationToken !== 0) {
+          Text('')
+            .width(0)
+            .height(0)
+            .onAppear(() => {
+              this.consumeContinuationState();
+            })
+        }
+
         Column() {
           List({ space: 1, scroller: this.scroller }) {
             ForEach(this.sortedList, (item: Item, index: number) => {
@@ -183,7 +301,7 @@ struct Index {
                           .fontWeight(FontWeight.Bold)
                           .margin({ bottom: 8 })
                           .textAlign(TextAlign.Start)
-                        Text(item.message[item.message.length - 1].msg)
+                        Text(this.getLastMessageText(item))
                           .fontSize(16)
                           .maxLines(1)
                           .constraintSize({ maxWidth: '70%' })
@@ -217,6 +335,7 @@ struct Index {
               // [End visibility]
               .onClick(() => {
                 // Jump to chat page.
+                this.rememberChatContinuationState(item.id);
                 this.pageStack.pushPathByName('ChatPage', item);
               })
               .transition({ type: TransitionType.Delete, opacity: 0 })
@@ -230,6 +349,7 @@ struct Index {
                   onAction: () => {
                     this.getUIContext().animateTo({ duration: 1000 }, () => {
                       this.sortedList.splice(index, 1);
+                      this.saveContacts();
                     })
                   }
                 },
@@ -270,6 +390,7 @@ struct Index {
               let deleteIndex = this.sortedList.indexOf(this.dragItem);
               this.sortedList.splice(deleteIndex, 1);
               this.sortedList.splice(insertIndex, 0, this.dragItem);
+              this.saveContacts();
             })
           })
           // [End onItemDragMove]
@@ -281,8 +402,15 @@ struct Index {
               message: [],
               isNewMessage: false,
               time: '',
-              isTop: false
+              isTop: false,
+              unreadCount: 0,
+              lastMessageTime: Date.now(),
+              isTyping: false,
+              draft: '',
+              isGroup: false,
+              members: []
             };
+            this.saveContacts();
           })
         }
         .padding(10)

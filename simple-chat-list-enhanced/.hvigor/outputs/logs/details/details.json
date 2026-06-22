@@ -7,15 +7,13 @@
         "INCLUDE_IN_BUILD": true,
         "IS_COMMAND_LINE_ENTRY_MODULE": true,
         "MODULE_TYPE": "entry",
-        "INCREMENTAL_TASKS": {
-          "COMPILE_ARKTS": true
-        },
         "IS_INCREMENTAL_MODULE": true
       }
     ],
     "NATIVE_COMPILER": "Default",
     "IS_FULL_BUILD": false,
-    "BUILD_MODE": "debug"
+    "BUILD_MODE": "debug",
+    "USE_NORMALIZED_OHMURL": true
   },
   "HVIGOR": {
     "IS_INCREMENTAL": true,
@@ -24,22 +22,21 @@
     "IS_HVIGORFILE_TYPE_CHECK": false,
     "TASK_TIME": {
       "923fe53966c6cd9343e11af776cd4b05be315ea4b200b02e4d5dfb0f929b73bf": {
-        "CreateModuleInfo": 807400,
-        "ConfigureCmake": 257800,
-        "PreCheckSyscap": 436400,
-        "ProcessIntegratedHsp": 742800,
-        "BuildNativeWithCmake": 226000,
-        "SyscapTransform": 10141200,
-        "ProcessStartupConfig": 1833300,
-        "BuildNativeWithNinja": 604100,
-        "BuildJS": 1608300,
-        "CompileArkTS": 5344593900,
-        "ProcessCompiledResources": 425100,
-        "PackageHap": 192065300,
-        "PackingCheck": 4818100,
-        "SignHap": 1308500,
-        "CollectDebugSymbol": 664100,
-        "assembleHap": 138300
+        "PreBuild": 196309300,
+        "CreateModuleInfo": 482200,
+        "ConfigureCmake": 272300,
+        "PreCheckSyscap": 579500,
+        "ProcessIntegratedHsp": 580500,
+        "BuildNativeWithCmake": 204600,
+        "SyscapTransform": 4920200,
+        "ProcessStartupConfig": 1815900,
+        "BuildNativeWithNinja": 550100,
+        "BuildJS": 2245400,
+        "ProcessCompiledResources": 414200,
+        "PackingCheck": 5209000,
+        "SignHap": 2793500,
+        "CollectDebugSymbol": 2359900,
+        "assembleHap": 426800
       }
     },
     "APIS": [
@@ -50,7 +47,7 @@
       "ENABLE_CPP_FUNCTION_LEVEL_INCREMENTAL": false
     },
     "CONFIG_PROPERTIES": {},
-    "BUILD_ID": "202605122352117950",
-    "TOTAL_TIME": 7205164300
+    "TOTAL_TIME": 567319800,
+    "BUILD_ID": "202606220114135930"
   }
 }

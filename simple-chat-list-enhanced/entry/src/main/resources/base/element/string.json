@@ -71,6 +71,14 @@
     {
       "name": "Completed",
       "value": "Completed."
+    },
+    {
+      "name": "permission_distributed_datasync_reason",
+      "value": "Sync chat messages across your devices."
+    },
+    {
+      "name": "permission_read_imagevideo_reason",
+      "value": "需要访问相册以选择和发送图片"
     }
   ]
 }

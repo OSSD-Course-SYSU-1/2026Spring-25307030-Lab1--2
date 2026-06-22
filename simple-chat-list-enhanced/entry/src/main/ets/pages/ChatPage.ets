@@ -13,11 +13,22 @@
  * limitations under the License.
  */
 
-import { Item, messageObj, MessageType, MessageStatus, EmojiData, ImageData } from '../common/CommonConstants';
+import { Item, messageObj, MessageType, MessageStatus, EmojiData, ImageData, CommonConstants } from '../common/CommonConstants';
+import {
+  ChatStorage,
+  contactToSerializable,
+  serializableToContact,
+  SerializableContact
+} from '../common/ChatStorage';
+import { APP_CURRENT_CONTACT_ID, APP_CURRENT_ROUTE, ROUTE_CHAT } from '../common/ContinuationState';
+import pasteboard from '@ohos.pasteboard';
 
 @Component
 export struct ChatPage {
   private scroller: Scroller = new Scroller();
+  private chatStorage: ChatStorage = ChatStorage.getInstance();
+  private isStorageReady: boolean = false;
+  private isSyncListenerReady: boolean = false;
   @State messageList: Array<string> = [];
   @State inputMessage: string = '';
   @State isRefreshing: boolean = false;
@@ -57,13 +68,98 @@ export struct ChatPage {
   @State contextMenuX: number = 0;               // 菜单X坐标
   @State contextMenuY: number = 0;               // 菜单Y坐标
   @State replyToMessage: messageObj | null = null;      // 引用回复的消息
-  @State showForwardPanel: boolean = false;      // 转发面板
+  @State showForwardPanel: boolean = false;              // 转发面板
+  @State forwardContacts: Item[] = [];                   // 可转发联系人
+  @State selectedForwardContactIds: number[] = [];       // 已选择的转发对象
   @State isTypingStatus: boolean = false;        // 正在输入状态
   private typingTimer: number = -1;              // 输入计时器
   
   // 草稿存储（使用 Map 存储每个联系人的草稿）
   private static draftMap: Map<number, string> = new Map();
   private currentContactId: number = 0;          // 当前联系人ID
+
+  async ensureStorageReady() {
+    if (this.isStorageReady) {
+      return;
+    }
+    await this.chatStorage.init(getContext(this));
+    this.isStorageReady = true;
+  }
+
+  applyCurrentContact(contact: Item) {
+    this.itemInfo = contact;
+    this.currentContactId = this.itemInfo.id;
+    this.itemMessage = this.itemInfo.message;
+    this.startIndex = this.itemMessage.length - 10;
+    this.showItemMessage = this.itemMessage.slice(-10);
+    AppStorage.setOrCreate(APP_CURRENT_ROUTE, ROUTE_CHAT);
+    AppStorage.setOrCreate(APP_CURRENT_CONTACT_ID, this.currentContactId);
+
+    let savedDraft = ChatPage.draftMap.get(this.currentContactId) || this.itemInfo.draft || '';
+    this.inputMessage = savedDraft;
+  }
+
+  async restoreContact(param: Item) {
+    await this.ensureStorageReady();
+    this.bindSyncListener();
+    let storedContacts = await this.chatStorage.loadContacts();
+    let storedContact = storedContacts.find((contact: SerializableContact) => contact.id === param.id);
+    if (storedContact) {
+      this.applyCurrentContact(serializableToContact(storedContact));
+    } else {
+      this.applyCurrentContact(param);
+    }
+    let localDraft = await this.chatStorage.loadDraft(this.currentContactId);
+    if (localDraft) {
+      this.inputMessage = localDraft;
+      ChatPage.draftMap.set(this.currentContactId, localDraft);
+    }
+  }
+
+  async saveCurrentContact() {
+    await this.ensureStorageReady();
+
+    this.itemInfo.message = this.itemMessage;
+    this.itemInfo.draft = '';
+    if (this.itemMessage.length > 0) {
+      let lastMessage = this.itemMessage[this.itemMessage.length - 1];
+      this.itemInfo.lastMessageTime = lastMessage.timestamp || Date.now();
+      this.itemInfo.time = this.formatTime(this.itemInfo.lastMessageTime);
+    }
+
+    let storedContacts = await this.chatStorage.loadContacts();
+    if (storedContacts.length === 0) {
+      storedContacts = CommonConstants.MESSAGE_LIST.map((item: Item) => contactToSerializable(item));
+    }
+
+    let index = storedContacts.findIndex((contact: SerializableContact) => contact.id === this.itemInfo.id);
+    let currentContact = contactToSerializable(this.itemInfo);
+    currentContact.draft = '';
+    if (index === -1) {
+      storedContacts.push(currentContact);
+    } else {
+      storedContacts[index] = currentContact;
+    }
+    await this.chatStorage.saveContacts(storedContacts);
+  }
+
+  async saveLocalDraft(value: string) {
+    await this.ensureStorageReady();
+    await this.chatStorage.saveDraft(this.currentContactId, value);
+  }
+
+  bindSyncListener() {
+    if (this.isSyncListenerReady) {
+      return;
+    }
+    this.isSyncListenerReady = true;
+    this.chatStorage.onContactsChanged((contacts: SerializableContact[]) => {
+      let currentContact = contacts.find((contact: SerializableContact) => contact.id === this.currentContactId);
+      if (currentContact) {
+        this.applyCurrentContact(serializableToContact(currentContact));
+      }
+    });
+  }
   
   getLastTenElements(arr: messageObj[]) {
     this.startIndex = Math.max(0, this.startIndex -= 10);
@@ -77,13 +173,14 @@ export struct ChatPage {
   
   // 发送消息通用方法
   sendMessage(msg: string, type: MessageType, duration?: number) {
+    let now = Date.now();
     let newMsg: messageObj = {
-      id: Date.now(),
+      id: now * 1000 + Math.floor(Math.random() * 1000),
       sender: 'myself',
       msg: msg,
       type: type,
       duration: duration || 0,
-      timestamp: Date.now(),
+      timestamp: now,
       status: MessageStatus.SENT,
       isRecalled: false,
       isRead: false,
@@ -92,6 +189,12 @@ export struct ChatPage {
     this.itemMessage.push(newMsg);
     this.showItemMessage = this.itemMessage.slice(-10);
     this.scroller.scrollEdge(Edge.Bottom);
+    if (type === MessageType.TEXT && msg === this.inputMessage) {
+      this.inputMessage = '';
+      ChatPage.draftMap.set(this.currentContactId, '');
+      this.saveLocalDraft('');
+    }
+    this.saveCurrentContact();
     this.replyToMessage = null; // 清除引用
     
     // 模拟对方正在输入
@@ -135,6 +238,7 @@ export struct ChatPage {
   markAsUnread() {
     this.itemInfo.isNewMessage = true;
     this.itemInfo.unreadCount = 1;
+    this.saveCurrentContact();
     this.pathStack.pop();
   }
   
@@ -155,25 +259,126 @@ export struct ChatPage {
       };
       this.itemMessage.push(systemMsg);
       this.showItemMessage = this.itemMessage.slice(-10);
+      this.saveCurrentContact();
     }
   }
   
-  // 复制消息
-  copyMessage(msg: messageObj) {
-    // 在实际应用中，这里应该调用系统剪贴板API
-    // 这里仅做演示
-    console.log('复制消息:', msg.msg);
+  getMessageActionText(msg: messageObj): string {
+    if (typeof msg.msg === 'string' && msg.msg.length > 0) {
+      return msg.msg;
+    }
+    if (msg.type === MessageType.IMAGE) {
+      return '[图片消息]';
+    }
+    if (msg.type === MessageType.VOICE) {
+      return `[语音消息 ${msg.duration || 0}秒]`;
+    }
+    if (msg.type === MessageType.FILE) {
+      return '[文件消息]';
+    }
+    return '[消息]';
   }
-  
-  // 转发消息
-  forwardMessage(msg: messageObj) {
+
+  showOperationToast(message: string) {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message, duration: 1800 });
+    } catch (err) {
+      console.warn('[ChatPage] Failed to show toast: ' + JSON.stringify(err));
+    }
+  }
+
+  // 复制消息到系统剪贴板
+  async copyMessage(msg: messageObj) {
+    try {
+      let data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.getMessageActionText(msg));
+      await pasteboard.getSystemPasteboard().setData(data);
+      this.showOperationToast('已复制到剪贴板');
+    } catch (err) {
+      console.error('[ChatPage] Copy message failed: ' + JSON.stringify(err));
+      this.showOperationToast('复制失败，请重试');
+    }
+  }
+
+  // 打开联系人选择面板
+  async forwardMessage(msg: messageObj) {
     this.selectedMessage = msg;
+    this.selectedForwardContactIds = [];
+    await this.ensureStorageReady();
+    let storedContacts = await this.chatStorage.loadContacts();
+    if (storedContacts.length > 0) {
+      this.forwardContacts = storedContacts
+        .map((contact: SerializableContact) => serializableToContact(contact))
+        .filter((contact: Item) => contact.id !== this.currentContactId);
+    } else {
+      this.forwardContacts = CommonConstants.MESSAGE_LIST.filter((contact: Item) => contact.id !== this.currentContactId);
+    }
     this.showForwardPanel = true;
+  }
+
+  toggleForwardContact(contactId: number) {
+    if (this.selectedForwardContactIds.includes(contactId)) {
+      this.selectedForwardContactIds = this.selectedForwardContactIds.filter((id: number) => id !== contactId);
+    } else {
+      this.selectedForwardContactIds = this.selectedForwardContactIds.concat(contactId);
+    }
+  }
+
+  closeForwardPanel() {
+    this.showForwardPanel = false;
+    this.selectedForwardContactIds = [];
+  }
+
+  // 将消息真正写入选中联系人的会话
+  async confirmForwardMessage() {
+    if (!this.selectedMessage || this.selectedForwardContactIds.length === 0) {
+      this.showOperationToast('请至少选择一个联系人');
+      return;
+    }
+
+    await this.ensureStorageReady();
+    let storedContacts = await this.chatStorage.loadContacts();
+    let contacts: Item[] = storedContacts.length > 0
+      ? storedContacts.map((contact: SerializableContact) => serializableToContact(contact))
+      : CommonConstants.MESSAGE_LIST.map((contact: Item) => contact);
+    let sourceMessage = this.selectedMessage;
+    let now = Date.now();
+    let forwardedCount = 0;
+
+    contacts.forEach((contact: Item) => {
+      if (!this.selectedForwardContactIds.includes(contact.id)) {
+        return;
+      }
+      let forwardedMessage: messageObj = {
+        id: now + forwardedCount,
+        sender: 'myself',
+        msg: sourceMessage.msg,
+        type: sourceMessage.type || MessageType.TEXT,
+        duration: sourceMessage.duration || 0,
+        timestamp: now,
+        status: MessageStatus.SENT,
+        isRecalled: false,
+        isRead: false,
+        replyTo: null
+      };
+      contact.message.push(forwardedMessage);
+      contact.lastMessageTime = now;
+      contact.time = this.formatTime(now);
+      forwardedCount++;
+    });
+
+    await this.chatStorage.saveContacts(contacts.map((contact: Item) => contactToSerializable(contact)));
+    this.closeForwardPanel();
+    this.selectedMessage = null;
+    this.showOperationToast(`已转发给 ${forwardedCount} 位联系人`);
   }
   
   // 引用回复
   replyMessage(msg: messageObj) {
     this.replyToMessage = msg;
+    this.showEmojiPanel = false;
+    this.showImagePanel = false;
+    this.showMorePanel = false;
+    this.scroller.scrollEdge(Edge.Bottom);
   }
   
   // 删除消息
@@ -182,6 +387,7 @@ export struct ChatPage {
     if (index !== -1) {
       this.itemMessage.splice(index, 1);
       this.showItemMessage = this.itemMessage.slice(-10);
+      this.saveCurrentContact();
     }
   }
   
@@ -193,6 +399,8 @@ export struct ChatPage {
       }
     });
     this.itemInfo.unreadCount = 0;
+    this.itemInfo.isNewMessage = false;
+    this.saveCurrentContact();
   }
   
   // 搜索消息
@@ -232,6 +440,7 @@ export struct ChatPage {
     
     // 保存草稿到静态 Map
     ChatPage.draftMap.set(this.currentContactId, value);
+    this.saveLocalDraft(value);
     
     // 模拟正在输入状态
     if (this.typingTimer !== -1) {
@@ -348,18 +557,27 @@ export struct ChatPage {
                     Column() {
                       // 引用回复显示
                       if (item.replyTo) {
-                        Row() {
-                          Text(`回复: ${item.replyTo.msg}`)
+                        Column() {
+                          Text(item.replyTo.sender === 'myself' ? '回复 我' : `回复 ${this.itemInfo.name}`)
+                            .fontSize(11)
+                            .fontColor('#667085')
+                            .fontWeight(FontWeight.Medium)
+                            .width('100%')
+                          Text(this.getMessageActionText(item.replyTo))
                             .fontSize(12)
-                            .fontColor('#999999')
+                            .fontColor('#475467')
                             .maxLines(1)
                             .textOverflow({ overflow: TextOverflow.Ellipsis })
+                            .width('100%')
+                            .margin({ top: 2 })
                         }
                         .width('70%')
-                        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-                        .backgroundColor('#E8E8E8')
-                        .borderRadius(4)
-                        .margin({ bottom: 4 })
+                        .alignItems(HorizontalAlign.Start)
+                        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                        .backgroundColor('#F2F4F7')
+                        .border({ width: { left: 3 }, color: '#98A2B3' })
+                        .borderRadius(6)
+                        .margin({ left: 44, bottom: 5 })
                       }
                       
                       Row() {
@@ -371,7 +589,7 @@ export struct ChatPage {
                         // 根据消息类型显示不同内容
                         if (item.type === MessageType.IMAGE) {
                           Column() {
-                            Image($r('app.media.Public_avatar'))
+                            Image($r('app.media.icon_picture'))
                               .width(100)
                               .height(100)
                               .borderRadius(8)
@@ -397,6 +615,22 @@ export struct ChatPage {
                           .backgroundColor('#F1F3F5')
                           .borderRadius(12)
                           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+                        } else if (item.type === MessageType.FILE) {
+                          Row() {
+                            Image($r('app.media.icon_file'))
+                              .width(28)
+                              .height(28)
+                              .margin({ right: 8 })
+                            Text(item.msg)
+                              .fontSize(14)
+                              .fontColor('#333333')
+                              .maxLines(1)
+                              .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          }
+                          .constraintSize({ maxWidth: '70%' })
+                          .backgroundColor('#F1F3F5')
+                          .borderRadius(12)
+                          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
                         } else {
                           Text(item.msg)
                             .fontSize(item.type === MessageType.EMOJI ? 32 : 16)
@@ -434,25 +668,34 @@ export struct ChatPage {
                     Column() {
                       // 引用回复显示
                       if (item.replyTo) {
-                        Row() {
-                          Text(`回复: ${item.replyTo.msg}`)
+                        Column() {
+                          Text(item.replyTo.sender === 'myself' ? '回复 我' : `回复 ${this.itemInfo.name}`)
+                            .fontSize(11)
+                            .fontColor('#52606D')
+                            .fontWeight(FontWeight.Medium)
+                            .width('100%')
+                          Text(this.getMessageActionText(item.replyTo))
                             .fontSize(12)
-                            .fontColor('#999999')
+                            .fontColor('#475467')
                             .maxLines(1)
                             .textOverflow({ overflow: TextOverflow.Ellipsis })
+                            .width('100%')
+                            .margin({ top: 2 })
                         }
                         .width('70%')
-                        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-                        .backgroundColor('#E8E8E8')
-                        .borderRadius(4)
-                        .margin({ bottom: 4 })
+                        .alignItems(HorizontalAlign.Start)
+                        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                        .backgroundColor('#EAF5E5')
+                        .border({ width: { left: 3 }, color: '#52A447' })
+                        .borderRadius(6)
+                        .margin({ left: '30%', right: 44, bottom: 5 })
                       }
                       
                       Row() {
                         // 根据消息类型显示不同内容
                         if (item.type === MessageType.IMAGE) {
                           Column() {
-                            Image($r('app.media.Public_avatar'))
+                            Image($r('app.media.icon_picture'))
                               .width(100)
                               .height(100)
                               .borderRadius(8)
@@ -478,6 +721,22 @@ export struct ChatPage {
                           .backgroundColor('#95EC69')
                           .borderRadius(12)
                           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+                        } else if (item.type === MessageType.FILE) {
+                          Row() {
+                            Text(item.msg)
+                              .fontSize(14)
+                              .fontColor('#333333')
+                              .maxLines(1)
+                              .textOverflow({ overflow: TextOverflow.Ellipsis })
+                              .margin({ right: 8 })
+                            Image($r('app.media.icon_file'))
+                              .width(28)
+                              .height(28)
+                          }
+                          .constraintSize({ maxWidth: '70%' })
+                          .backgroundColor('#95EC69')
+                          .borderRadius(12)
+                          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
                         } else {
                           Text(item.msg)
                             .fontSize(item.type === MessageType.EMOJI ? 32 : 16)
@@ -497,7 +756,7 @@ export struct ChatPage {
                           .margin({ left: 8 })
                       }
                       .width('100%')
-                      .height(item.type === MessageType.IMAGE ? 120 : 48)
+                      .constraintSize({ minHeight: item.type === MessageType.IMAGE ? 120 : 48 })
                       .justifyContent(FlexAlign.End)
                       
                       // 时间和已读状态
@@ -552,7 +811,7 @@ export struct ChatPage {
           })
         }
         .width('100%')
-        .height('calc(100% - 80vp)')
+        .layoutWeight(1)
         .padding({
           left: 16,
           right: 16
@@ -703,12 +962,11 @@ export struct ChatPage {
         if (this.showMorePanel) {
           Column() {
             Row() {
-              // 图片选项
               Column() {
-                Image($r('app.media.Public_avatar'))
+                Image($r('app.media.icon_picture'))
                   .width(48)
                   .height(48)
-                Text('图片')
+                Text('Picture')
                   .fontSize(12)
                   .margin({ top: 4 })
               }
@@ -719,13 +977,44 @@ export struct ChatPage {
                 this.showMorePanel = false;
                 this.showImagePanel = true;
               })
-              
-              // 搜索选项
+
               Column() {
-                Image($r('app.media.Public_avatar'))
+                Image($r('app.media.icon_emoji'))
                   .width(48)
                   .height(48)
-                Text('搜索')
+                Text('Emoji')
+                  .fontSize(12)
+                  .margin({ top: 4 })
+              }
+              .width(60)
+              .height(80)
+              .justifyContent(FlexAlign.Center)
+              .onClick(() => {
+                this.showMorePanel = false;
+                this.showEmojiPanel = true;
+              })
+
+              Column() {
+                Image($r('app.media.icon_file'))
+                  .width(48)
+                  .height(48)
+                Text('File')
+                  .fontSize(12)
+                  .margin({ top: 4 })
+              }
+              .width(60)
+              .height(80)
+              .justifyContent(FlexAlign.Center)
+              .onClick(() => {
+                this.showMorePanel = false;
+                this.sendMessage('Transfer_File.pdf', MessageType.FILE);
+              })
+
+              Column() {
+                Image($r('app.media.icon_search'))
+                  .width(48)
+                  .height(48)
+                Text('Search')
                   .fontSize(12)
                   .margin({ top: 4 })
               }
@@ -738,11 +1027,11 @@ export struct ChatPage {
               })
             }
             .width('100%')
-            .justifyContent(FlexAlign.Start)
-            .padding({ left: 16 })
+            .justifyContent(FlexAlign.SpaceAround)
+            .padding({ left: 12, right: 12 })
           }
           .width('100%')
-          .height(120)
+          .height(160)
           .backgroundColor('#FFFFFF')
           .border({ width: { top: 1 }, color: '#E5E5E5' })
           .justifyContent(FlexAlign.Center)
@@ -750,44 +1039,122 @@ export struct ChatPage {
 
         // 转发面板
         if (this.showForwardPanel) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('rgba(16, 24, 40, 0.42)')
+            .position({ x: 0, y: 0 })
+            .onClick(() => {
+              this.closeForwardPanel();
+            })
+
           Column() {
-            Text('选择转发对象')
-              .fontSize(16)
-              .margin({ bottom: 8 })
-            
-            List() {
-              ForEach(['Jack', 'Tom', 'Sam', 'Taylor', 'John'], (name: string) => {
-                ListItem() {
-                  Row() {
-                    Text(name)
-                      .fontSize(14)
-                  }
-                  .width('100%')
-                  .padding(8)
-                  .onClick(() => {
-                    // 转发消息
-                    if (this.selectedMessage) {
-                      this.sendMessage(this.selectedMessage.msg as string, 
-                        this.selectedMessage.type || MessageType.TEXT);
-                    }
-                    this.showForwardPanel = false;
-                  })
-                }
-              })
+            Row() {
+              Column() {
+                Text('转发消息')
+                  .fontSize(19)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor('#101828')
+                Text('可同时选择多个联系人')
+                  .fontSize(12)
+                  .fontColor('#667085')
+                  .margin({ top: 3 })
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+
+              Text('✕')
+                .fontSize(20)
+                .fontColor('#667085')
+                .padding(8)
+                .onClick(() => {
+                  this.closeForwardPanel();
+                })
             }
             .width('100%')
-            .height(200)
-            
-            Button('取消')
-              .onClick(() => {
-                this.showForwardPanel = false;
-              })
+
+            Row() {
+              Text(this.selectedMessage ? this.getMessageActionText(this.selectedMessage) : '')
+                .fontSize(13)
+                .fontColor('#344054')
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .width('100%')
+            .padding(10)
+            .margin({ top: 12, bottom: 8 })
+            .backgroundColor('#F2F4F7')
+            .borderRadius(8)
+
+            List() {
+              ForEach(this.forwardContacts, (contact: Item) => {
+                ListItem() {
+                  Row({ space: 12 }) {
+                    Image(contact.image)
+                      .width(38)
+                      .height(38)
+                      .borderRadius(19)
+
+                    Text(contact.name)
+                      .fontSize(15)
+                      .fontColor('#1D2939')
+                      .layoutWeight(1)
+
+                    Text(this.selectedForwardContactIds.includes(contact.id) ? '✓' : '')
+                      .fontSize(15)
+                      .fontColor('#FFFFFF')
+                      .fontWeight(FontWeight.Bold)
+                      .textAlign(TextAlign.Center)
+                      .width(24)
+                      .height(24)
+                      .backgroundColor(this.selectedForwardContactIds.includes(contact.id) ? '#0A59F7' : '#FFFFFF')
+                      .border({ width: 1.5, color: this.selectedForwardContactIds.includes(contact.id) ? '#0A59F7' : '#D0D5DD' })
+                      .borderRadius(12)
+                  }
+                  .width('100%')
+                  .height(58)
+                  .padding({ left: 4, right: 4 })
+                  .onClick(() => {
+                    this.toggleForwardContact(contact.id);
+                  })
+                }
+              }, (contact: Item) => contact.id.toString())
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .divider({ strokeWidth: 1, color: '#EAECF0', startMargin: 54 })
+
+            Row({ space: 10 }) {
+              Button('取消')
+                .fontSize(14)
+                .fontColor('#344054')
+                .backgroundColor('#F2F4F7')
+                .layoutWeight(1)
+                .onClick(() => {
+                  this.closeForwardPanel();
+                })
+
+              Button(this.selectedForwardContactIds.length > 0
+                ? `转发 (${this.selectedForwardContactIds.length})`
+                : '请选择联系人')
+                .fontSize(14)
+                .fontColor('#FFFFFF')
+                .backgroundColor(this.selectedForwardContactIds.length > 0 ? '#0A59F7' : '#B2CCFF')
+                .layoutWeight(1)
+                .onClick(() => {
+                  this.confirmForwardMessage();
+                })
+            }
+            .width('100%')
+            .margin({ top: 12 })
           }
-          .width('100%')
-          .height(300)
+          .width('90%')
+          .height('68%')
           .backgroundColor('#FFFFFF')
-          .padding(16)
-          .border({ width: { top: 1 }, color: '#E5E5E5' })
+          .padding(18)
+          .borderRadius(18)
+          .position({ x: '5%', y: '16%' })
+          .shadow({ radius: 24, color: 'rgba(16, 24, 40, 0.24)', offsetX: 0, offsetY: 8 })
         }
 
         // 录音提示
@@ -825,23 +1192,33 @@ export struct ChatPage {
         // 引用回复提示
         if (this.replyToMessage) {
           Row() {
-            Text(`回复: ${this.replyToMessage.msg}`)
-              .fontSize(12)
-              .fontColor('#666666')
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Column() {
+              Text(this.replyToMessage.sender === 'myself' ? '回复自己' : `回复 ${this.itemInfo.name}`)
+                .fontSize(11)
+                .fontColor('#0A59F7')
+                .fontWeight(FontWeight.Medium)
+              Text(this.getMessageActionText(this.replyToMessage))
+                .fontSize(13)
+                .fontColor('#475467')
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .margin({ top: 2 })
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
             
             Text('✕')
               .fontSize(16)
-              .fontColor('#999999')
-              .margin({ left: 8 })
+              .fontColor('#667085')
+              .padding(8)
               .onClick(() => {
                 this.replyToMessage = null;
               })
           }
           .width('100%')
-          .padding(8)
-          .backgroundColor('#F0F0F0')
+          .padding({ left: 14, right: 8, top: 8, bottom: 8 })
+          .backgroundColor('#F5F8FF')
+          .border({ width: { left: 3 }, color: '#0A59F7' })
         }
 
         // 底部输入栏
@@ -861,7 +1238,7 @@ export struct ChatPage {
                 })
 
               // 表情按钮
-              Image($r('app.media.emoji'))
+              Image($r('app.media.icon_emoji'))
                 .width(28)
                 .height(28)
                 .onClick(() => {
@@ -934,24 +1311,25 @@ export struct ChatPage {
     .menus([
       {
         value: '搜索消息',
-        icon: $r('app.media.Public_avatar'),
+        icon: $r('app.media.menu_search'),
         action: () => {
           this.showSearchPanel = !this.showSearchPanel;
         }
       },
       {
         value: '标记为未读',
-        icon: $r('app.media.Public_avatar'),
+        icon: $r('app.media.menu_unread'),
         action: () => {
           this.markAsUnread();
         }
       },
       {
         value: '清空聊天记录',
-        icon: $r('app.media.Public_avatar'),
+        icon: $r('app.media.menu_clear'),
         action: () => {
           this.itemMessage = [];
           this.showItemMessage = [];
+          this.saveCurrentContact();
         }
       }
     ])
@@ -967,6 +1345,7 @@ export struct ChatPage {
       if (savedDraft) {
         this.inputMessage = savedDraft;
       }
+      this.restoreContact(content.pathInfo.param as Item);
     })
   }
 }
