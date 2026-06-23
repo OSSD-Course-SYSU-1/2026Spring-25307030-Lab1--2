@@ -264,19 +264,62 @@ export struct ChatPage {
   }
   
   getMessageActionText(msg: messageObj): string {
-    if (typeof msg.msg === 'string' && msg.msg.length > 0) {
-      return msg.msg;
-    }
+    let text = typeof msg.msg === 'string' ? msg.msg : '';
     if (msg.type === MessageType.IMAGE) {
-      return '[图片消息]';
+      return text.length > 0 ? `[图片消息] ${text}` : '[图片消息]';
     }
     if (msg.type === MessageType.VOICE) {
       return `[语音消息 ${msg.duration || 0}秒]`;
     }
     if (msg.type === MessageType.FILE) {
-      return '[文件消息]';
+      return text.length > 0 ? `[文件消息] ${text}` : '[文件消息]';
+    }
+    if (msg.type === MessageType.MUSIC) {
+      return text.length > 0 ? `[音乐消息] ${text}` : '[音乐消息]';
+    }
+    if (msg.type === MessageType.VIDEO) {
+      return text.length > 0 ? `[视频消息] ${text}` : '[视频消息]';
+    }
+    if (msg.type === MessageType.LOCATION) {
+      return text.length > 0 ? `[位置消息] ${text}` : '[位置消息]';
+    }
+    if (text.length > 0) {
+      return text;
     }
     return '[消息]';
+  }
+
+  isCardMediaMessage(type: MessageType | undefined): boolean {
+    return type === MessageType.FILE ||
+      type === MessageType.MUSIC ||
+      type === MessageType.VIDEO ||
+      type === MessageType.LOCATION;
+  }
+
+  getCardMediaIcon(type: MessageType | undefined): Resource {
+    if (type === MessageType.MUSIC) {
+      return $r('app.media.icon_music');
+    }
+    if (type === MessageType.VIDEO) {
+      return $r('app.media.ic_meeting_video');
+    }
+    if (type === MessageType.LOCATION) {
+      return $r('app.media.icon_location');
+    }
+    return $r('app.media.icon_file');
+  }
+
+  getCardMediaTitle(type: MessageType | undefined): string {
+    if (type === MessageType.MUSIC) {
+      return '音乐';
+    }
+    if (type === MessageType.VIDEO) {
+      return '视频';
+    }
+    if (type === MessageType.LOCATION) {
+      return '位置';
+    }
+    return '文件';
   }
 
   showOperationToast(message: string) {
@@ -615,17 +658,24 @@ export struct ChatPage {
                           .backgroundColor('#F1F3F5')
                           .borderRadius(12)
                           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-                        } else if (item.type === MessageType.FILE) {
+                        } else if (this.isCardMediaMessage(item.type)) {
                           Row() {
-                            Image($r('app.media.icon_file'))
+                            Image(this.getCardMediaIcon(item.type))
                               .width(28)
                               .height(28)
                               .margin({ right: 8 })
-                            Text(item.msg)
-                              .fontSize(14)
-                              .fontColor('#333333')
-                              .maxLines(1)
-                              .textOverflow({ overflow: TextOverflow.Ellipsis })
+                            Column() {
+                              Text(this.getCardMediaTitle(item.type))
+                                .fontSize(13)
+                                .fontColor('#666666')
+                              Text(item.msg)
+                                .fontSize(14)
+                                .fontColor('#333333')
+                                .maxLines(1)
+                                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                                .margin({ top: 2 })
+                            }
+                            .alignItems(HorizontalAlign.Start)
                           }
                           .constraintSize({ maxWidth: '70%' })
                           .backgroundColor('#F1F3F5')
@@ -721,15 +771,24 @@ export struct ChatPage {
                           .backgroundColor('#95EC69')
                           .borderRadius(12)
                           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-                        } else if (item.type === MessageType.FILE) {
+                        } else if (this.isCardMediaMessage(item.type)) {
                           Row() {
-                            Text(item.msg)
-                              .fontSize(14)
-                              .fontColor('#333333')
-                              .maxLines(1)
-                              .textOverflow({ overflow: TextOverflow.Ellipsis })
-                              .margin({ right: 8 })
-                            Image($r('app.media.icon_file'))
+                            Column() {
+                              Text(this.getCardMediaTitle(item.type))
+                                .fontSize(13)
+                                .fontColor('#666666')
+                                .width('100%')
+                                .textAlign(TextAlign.End)
+                              Text(item.msg)
+                                .fontSize(14)
+                                .fontColor('#333333')
+                                .maxLines(1)
+                                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                                .margin({ top: 2 })
+                            }
+                            .alignItems(HorizontalAlign.End)
+                            .margin({ right: 8 })
+                            Image(this.getCardMediaIcon(item.type))
                               .width(28)
                               .height(28)
                           }
@@ -964,14 +1023,14 @@ export struct ChatPage {
             Row() {
               Column() {
                 Image($r('app.media.icon_picture'))
-                  .width(48)
-                  .height(48)
-                Text('Picture')
+                  .width(42)
+                  .height(42)
+                Text('图片')
                   .fontSize(12)
                   .margin({ top: 4 })
               }
-              .width(60)
-              .height(80)
+              .width(64)
+              .height(72)
               .justifyContent(FlexAlign.Center)
               .onClick(() => {
                 this.showMorePanel = false;
@@ -980,14 +1039,14 @@ export struct ChatPage {
 
               Column() {
                 Image($r('app.media.icon_emoji'))
-                  .width(48)
-                  .height(48)
-                Text('Emoji')
+                  .width(42)
+                  .height(42)
+                Text('表情')
                   .fontSize(12)
                   .margin({ top: 4 })
               }
-              .width(60)
-              .height(80)
+              .width(64)
+              .height(72)
               .justifyContent(FlexAlign.Center)
               .onClick(() => {
                 this.showMorePanel = false;
@@ -995,15 +1054,52 @@ export struct ChatPage {
               })
 
               Column() {
-                Image($r('app.media.icon_file'))
-                  .width(48)
-                  .height(48)
-                Text('File')
+                Image($r('app.media.icon_music'))
+                  .width(42)
+                  .height(42)
+                Text('音乐')
                   .fontSize(12)
                   .margin({ top: 4 })
               }
-              .width(60)
-              .height(80)
+              .width(64)
+              .height(72)
+              .justifyContent(FlexAlign.Center)
+              .onClick(() => {
+                this.showMorePanel = false;
+                this.sendMessage('夜间漫游.mp3', MessageType.MUSIC);
+              })
+
+              Column() {
+                Image($r('app.media.ic_meeting_video'))
+                  .width(42)
+                  .height(42)
+                Text('视频')
+                  .fontSize(12)
+                  .margin({ top: 4 })
+              }
+              .width(64)
+              .height(72)
+              .justifyContent(FlexAlign.Center)
+              .onClick(() => {
+                this.showMorePanel = false;
+                this.sendMessage('项目演示视频.mp4', MessageType.VIDEO);
+              })
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.SpaceAround)
+            .padding({ left: 12, right: 12 })
+
+            Row() {
+              Column() {
+                Image($r('app.media.icon_file'))
+                  .width(42)
+                  .height(42)
+                Text('文件')
+                  .fontSize(12)
+                  .margin({ top: 4 })
+              }
+              .width(64)
+              .height(72)
               .justifyContent(FlexAlign.Center)
               .onClick(() => {
                 this.showMorePanel = false;
@@ -1011,15 +1107,31 @@ export struct ChatPage {
               })
 
               Column() {
-                Image($r('app.media.icon_search'))
-                  .width(48)
-                  .height(48)
-                Text('Search')
+                Image($r('app.media.icon_location'))
+                  .width(42)
+                  .height(42)
+                Text('位置')
                   .fontSize(12)
                   .margin({ top: 4 })
               }
-              .width(60)
-              .height(80)
+              .width(64)
+              .height(72)
+              .justifyContent(FlexAlign.Center)
+              .onClick(() => {
+                this.showMorePanel = false;
+                this.sendMessage('当前位置：复旦大学张江校区', MessageType.LOCATION);
+              })
+
+              Column() {
+                Image($r('app.media.icon_search'))
+                  .width(42)
+                  .height(42)
+                Text('搜索')
+                  .fontSize(12)
+                  .margin({ top: 4 })
+              }
+              .width(64)
+              .height(72)
               .justifyContent(FlexAlign.Center)
               .onClick(() => {
                 this.showMorePanel = false;
@@ -1028,10 +1140,11 @@ export struct ChatPage {
             }
             .width('100%')
             .justifyContent(FlexAlign.SpaceAround)
-            .padding({ left: 12, right: 12 })
+            .padding({ left: 36, right: 36 })
+            .margin({ top: 10 })
           }
           .width('100%')
-          .height(160)
+          .height(210)
           .backgroundColor('#FFFFFF')
           .border({ width: { top: 1 }, color: '#E5E5E5' })
           .justifyContent(FlexAlign.Center)

@@ -20,6 +20,9 @@ export enum MessageType {
   IMAGE = 'image',     // 图片消息
   VOICE = 'voice',     // 语音消息
   FILE = 'file',       // 文件消息
+  MUSIC = 'music',     // 音乐消息
+  VIDEO = 'video',     // 视频消息
+  LOCATION = 'location', // 位置消息
   SYSTEM = 'system'    // 系统消息
 }
 
